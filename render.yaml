@@ -1,7 +1,10 @@
 services:
-  - type: web
-    name: balamut-gemini-bot
-    env: python
+  - type: worker
+    name: telegram-gemini-bot
+    runtime: python
+    plan: free
+    repo: https://github.com/cryptobratru-source/telegram-gemini-bot
+    branch: master
     buildCommand: pip install -r requirements.txt
     startCommand: python telegram_gemini_bot.py
     envVars:
@@ -9,3 +12,5 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: PYTHON_VERSION
+        value: "3.12"
