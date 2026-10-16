@@ -133,8 +133,8 @@ async def process_image(file_data: bytes) -> str:
 
 
 async def get_gemini_response(chat_id: int, user_message: str) -> str:
-    history = await get_chat_history(chat_id)
-    context = "\n".join([f"{username}: {text}" for username, text in history[-50:]])
+    history = await get_chat_history(chat_id, limit=10000)  # Все сообщения (практически безлимит)
+    context = "\n".join([f"{username}: {text}" for username, text in history])
 
     prompt = f"""Ты — Gemini AI, участвуешь в групповом чате Telegram с пользователем Стасом и Баламутом.
 
