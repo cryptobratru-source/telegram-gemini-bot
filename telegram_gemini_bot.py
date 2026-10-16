@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
+GEMINI_MODEL = "gemini-3.1-pro-preview"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
     raise ValueError("Missing TELEGRAM_BOT_TOKEN or GEMINI_API_KEY in .env")
