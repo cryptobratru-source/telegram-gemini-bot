@@ -16,6 +16,9 @@ from docx import Document
 from openpyxl import load_workbook
 from PIL import Image
 
+# RAG memory
+from rag_memory import init_rag_db, save_embedding, find_relevant_messages, get_message_id
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -51,12 +54,18 @@ async def init_db():
 
 
 async def save_message(chat_id: int, user_id: int, username: str, message_text: str):
+    timestamp = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO messages (chat_id, user_id, username, message_text, timestamp) VALUES (?, ?, ?, ?, ?)",
-            (chat_id, user_id, username, message_text, datetime.now().isoformat())
+            (chat_id, user_id, username, message_text, timestamp)
         )
         await db.commit()
+
+    # Асинхронно сохраняем embedding для поиска
+    message_id = await get_message_id(chat_id, timestamp)
+    if message_id:
+        asyncio.create_task(save_embedding(message_id, message_text))
 
 
 async def get_chat_history(chat_id: int, limit: int = 100):
@@ -134,18 +143,27 @@ async def process_image(file_data: bytes) -> str:
 
 
 async def get_gemini_response(chat_id: int, user_message: str) -> str:
-    history = await get_chat_history(chat_id, limit=10000)  # Все сообщения (практически безлимит)
-    context = "\n".join([f"{username}: {text}" for username, text in history])
+    # Получаем последние 15 сообщений
+    recent_history = await get_chat_history(chat_id, limit=15)
+    recent_context = "\n".join([f"{username}: {text}" for username, text in recent_history])
 
+    # Ищем релевантные сообщения из всей истории (RAG)
+    relevant_messages = await find_relevant_messages(chat_id, user_message, limit=10)
+    relevant_context = "\n".join([f"{username}: {text}" for username, text in relevant_messages]) if relevant_messages else ""
+
+    # Формируем промпт с полной памятью
     prompt = f"""Ты — Gemini AI, участвуешь в групповом чате Telegram с пользователем Стасом и Баламутом.
 
-История последних сообщений:
-{context}
+Релевантные фрагменты из всей истории общения (дословно сохранённые):
+{relevant_context}
+
+Последние сообщения:
+{recent_context}
 
 Новое сообщение:
 {user_message}
 
-Ответь естественно, учитывая всю историю общения."""
+Ты помнишь КАЖДОЕ СЛОВО из всей истории нашего общения. Используй релевантные фрагменты выше чтобы ответить с учётом всего контекста. Ответь естественно."""
 
     payload = {
         "contents": [{
@@ -240,7 +258,8 @@ async def handle_group_message(message: Message):
 
 async def main():
     await init_db()
-    logger.info("Бот запущен с REST API (gemini-1.5-pro)")
+    await init_rag_db()
+    logger.info("Бот запущен с RAG памятью (помнит каждое слово)")
     await dp.start_polling(bot)
 
 
