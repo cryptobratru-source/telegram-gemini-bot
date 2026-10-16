@@ -16,9 +16,6 @@ from docx import Document
 from openpyxl import load_workbook
 from PIL import Image
 
-# RAG memory
-from rag_memory import init_rag_db, save_embedding, find_relevant_messages, get_message_id
-
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -62,11 +59,6 @@ async def save_message(chat_id: int, user_id: int, username: str, message_text: 
         )
         await db.commit()
 
-    # Асинхронно сохраняем embedding для поиска
-    message_id = await get_message_id(chat_id, timestamp)
-    if message_id:
-        asyncio.create_task(save_embedding(message_id, message_text))
-
 
 async def get_chat_history(chat_id: int, limit: int = 100):
     async with aiosqlite.connect(DB_PATH) as db:
@@ -76,6 +68,35 @@ async def get_chat_history(chat_id: int, limit: int = 100):
         ) as cursor:
             rows = await cursor.fetchall()
             return list(reversed(rows))
+
+
+async def get_full_memory(chat_id: int) -> str:
+    """Получает полную память: последние 20 + каждое 5-е из старых"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Последние 20 сообщений
+        async with db.execute(
+            "SELECT username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 20",
+            (chat_id,)
+        ) as cursor:
+            recent = list(reversed(await cursor.fetchall()))
+
+        # Старые сообщения: каждое 5-е
+        async with db.execute(
+            "SELECT id, username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT -1 OFFSET 20",
+            (chat_id,)
+        ) as cursor:
+            all_old = await cursor.fetchall()
+            old_sampled = [all_old[i] for i in range(0, len(all_old), 5)]  # каждое 5-е
+            old_sampled.reverse()  # хронологический порядок
+            old_messages = [(username, text) for _, username, text in old_sampled]
+
+    # Формируем контекст
+    old_context = "\n".join([f"{u}: {t}" for u, t in old_messages]) if old_messages else ""
+    recent_context = "\n".join([f"{u}: {t}" for u, t in recent])
+
+    if old_context:
+        return f"=== Старые сообщения (дословно, каждое 5-е) ===\n{old_context}\n\n=== Последние 20 сообщений ===\n{recent_context}"
+    return recent_context
 
 
 async def download_file(file_id: str) -> bytes:
@@ -143,27 +164,18 @@ async def process_image(file_data: bytes) -> str:
 
 
 async def get_gemini_response(chat_id: int, user_message: str) -> str:
-    # Получаем последние 15 сообщений
-    recent_history = await get_chat_history(chat_id, limit=15)
-    recent_context = "\n".join([f"{username}: {text}" for username, text in recent_history])
+    # Получаем полную память с умной выборкой
+    full_context = await get_full_memory(chat_id)
 
-    # Ищем релевантные сообщения из всей истории (RAG)
-    relevant_messages = await find_relevant_messages(chat_id, user_message, limit=10)
-    relevant_context = "\n".join([f"{username}: {text}" for username, text in relevant_messages]) if relevant_messages else ""
-
-    # Формируем промпт с полной памятью
     prompt = f"""Ты — Gemini AI, участвуешь в групповом чате Telegram с пользователем Стасом и Баламутом.
 
-Релевантные фрагменты из всей истории общения (дословно сохранённые):
-{relevant_context}
-
-Последние сообщения:
-{recent_context}
+История общения (дословно сохранена):
+{full_context}
 
 Новое сообщение:
 {user_message}
 
-Ты помнишь КАЖДОЕ СЛОВО из всей истории нашего общения. Используй релевантные фрагменты выше чтобы ответить с учётом всего контекста. Ответь естественно."""
+Ты помнишь КАЖДОЕ СЛОВО из всей истории нашего общения. Отвечай естественно, учитывая весь контекст."""
 
     payload = {
         "contents": [{
@@ -185,6 +197,23 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
             ) as resp:
                 elapsed = time.time() - start
                 logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status}")
+
+                if resp.status == 429:
+                    logger.warning(f"Rate limit 429: ждём 4 секунды перед повтором")
+                    await asyncio.sleep(4)
+                    # Повторный запрос
+                    async with session.post(
+                        f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                        timeout=aiohttp.ClientTimeout(total=30)
+                    ) as retry_resp:
+                        if retry_resp.status != 200:
+                            error_text = await retry_resp.text()
+                            logger.error(f"Повтор тоже failed {retry_resp.status}: {error_text[:500]}")
+                            return f"Извини, Gemini API перегружен (429 rate limit). Попробуй через минуту."
+                        result = await retry_resp.json()
+                        return result["candidates"][0]["content"]["parts"][0]["text"]
 
                 if resp.status != 200:
                     error_text = await resp.text()
@@ -258,8 +287,7 @@ async def handle_group_message(message: Message):
 
 async def main():
     await init_db()
-    await init_rag_db()
-    logger.info("Бот запущен с RAG памятью (помнит каждое слово)")
+    logger.info("Бот запущен с полной памятью (каждое 5-е + последние 20)")
     await dp.start_polling(bot)
 
 
