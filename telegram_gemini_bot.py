@@ -153,22 +153,31 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
     }
 
     try:
+        logger.info(f"Отправляю запрос к Gemini API (модель: {GEMINI_MODEL})")
+        import time
+        start = time.time()
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
                 json=payload,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
+                elapsed = time.time() - start
+                logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status}")
+
                 if resp.status != 200:
                     error_text = await resp.text()
-                    logger.error(f"Gemini API error {resp.status}: {error_text}")
-                    return "Извини, произошла ошибка при обращении к Gemini API."
+                    logger.error(f"Gemini API error {resp.status} ({elapsed:.1f}s): {error_text[:500]}")
+                    return f"Извини, произошла ошибка при обращении к Gemini API (статус {resp.status})."
 
                 result = await resp.json()
+                logger.info(f"Gemini успешно ответил ({len(result['candidates'][0]['content']['parts'][0]['text'])} символов)")
                 return result["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        logger.error(f"Gemini API error: {e}")
-        return "Извини, произошла ошибка."
+        logger.error(f"Gemini API exception: {type(e).__name__}: {str(e)}")
+        return f"Извини, произошла ошибка: {type(e).__name__}"
 
 
 @dp.message(Command("start"))
