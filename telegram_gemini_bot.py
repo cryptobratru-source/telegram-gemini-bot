@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = "models/gemini-2.5-pro"
+GEMINI_MODEL = "gemini-2.5-pro"  # без префикса models/
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
