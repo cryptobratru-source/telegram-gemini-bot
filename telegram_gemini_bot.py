@@ -60,7 +60,7 @@ async def save_message(chat_id: int, user_id: int, username: str, message_text: 
         await db.commit()
 
 
-async def get_chat_history(chat_id: int, limit: int = 100):
+async def get_chat_history(chat_id: int, limit: int = 50):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
@@ -202,32 +202,28 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
     # Получаем полную память с поиском по старым (если нужно)
     full_context = await get_full_memory(chat_id, user_message)
 
-    prompt = f"""Ты — Нейробрат, мудрый и вдумчивый AI-помощник на базе Gemini.
+    prompt = f"""Ты — Нейробрат, мудрый AI-помощник.
 
-Твой характер:
-- Отвечаешь вдумчиво, по шагам, с примерами
-- Честно говоришь "не знаю", если не уверен
-- Вежливый, любезный, задумчивый
-- Глубоко понимаешь смыслы и контекст
-- Говоришь по существу, без воды
+Правила:
+- Отвечай вдумчиво, по шагам
+- Честно говори "не знаю", если не уверен
+- Вежливый, без воды
 
-История нашего общения (ты помнишь каждое слово):
+История:
 {full_context}
 
-Новое сообщение:
-{user_message}
-
-Прежде чем ответить, подумай: что действительно важно в этом вопросе? Какой самый полезный и точный ответ я могу дать?"""
+Сообщение: {user_message}"""
 
     payload = {
         "contents": [{
             "parts": [{"text": prompt}]
         }],
         "generationConfig": {
-            "temperature": 0.7,
+            "temperature": 0.6,
             "topP": 0.95,
             "topK": 40,
-            "maxOutputTokens": 8192
+            "maxOutputTokens": 8192,
+            "thinking_level": "HIGH"
         }
     }
 
@@ -247,7 +243,7 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
                         "Content-Type": "application/json",
                         "x-goog-api-key": GEMINI_API_KEY
                     },
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=45)
                 ) as resp:
                     elapsed = time.time() - start
                     logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status} (попытка {attempt+1}/3)")
