@@ -105,7 +105,7 @@ def extract_keywords(text: str) -> list:
 
 
 async def get_full_memory(chat_id: int, user_message: str) -> str:
-    """Получает полную память: последние 50 + поиск по старым (если нужно)"""
+    """Получает полную память: последние 50 + ВСЕГДА ищет по старым"""
     async with aiosqlite.connect(DB_PATH) as db:
         # Последние 50 сообщений
         async with db.execute(
@@ -114,24 +114,19 @@ async def get_full_memory(chat_id: int, user_message: str) -> str:
         ) as cursor:
             recent = list(reversed(await cursor.fetchall()))
 
-    # Проверяем, нужен ли поиск по старым сообщениям
-    memory_triggers = ["помнишь", "назад", "тогда", "раньше", "говорил", "обсуждали", "неделю", "месяц", "вчера"]
-    needs_search = any(trigger in user_message.lower() for trigger in memory_triggers)
-
-    old_messages = []
-    if needs_search:
-        keywords = extract_keywords(user_message)
-        old_results = await search_old_messages(chat_id, keywords, days_back=90, limit=10)
-        old_messages = [(username, text) for username, text, _ in old_results]
+    # ВСЕГДА ищем по ключевым словам в старых сообщениях
+    keywords = extract_keywords(user_message)
+    old_results = await search_old_messages(chat_id, keywords, days_back=90, limit=10)
+    old_messages = [(username, text) for username, text, _ in old_results]
 
     # Формируем контекст
     recent_context = "\n".join([f"{u}: {t}" for u, t in recent])
 
     if old_messages:
         old_context = "\n".join([f"{u}: {t}" for u, t in old_messages])
-        return f"=== Старые сообщения (найдено по ключевым словам) ===\n{old_context}\n\n=== Последние 50 сообщений ===\n{recent_context}"
+        return f"=== Релевантные старые сообщения (за 90 дней) ===\n{old_context}\n\n=== Последние 50 сообщений ===\n{recent_context}"
 
-    return f"=== Последние 50 сообщений ===\n{recent_context}"
+    return f"=== Последние 50 сообщения ===\n{recent_context}"
 
 
 async def download_file(file_id: str) -> bytes:
