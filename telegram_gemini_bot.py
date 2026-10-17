@@ -234,49 +234,46 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
     try:
         logger.info(f"Отправляю запрос к Gemini API (модель: {GEMINI_MODEL})")
         import time
-        start = time.time()
 
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                GEMINI_API_URL,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": GEMINI_API_KEY
-                },
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                elapsed = time.time() - start
-                logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status}")
+            # Retry logic: 3 попытки с exponential backoff
+            for attempt in range(3):
+                start = time.time()
 
-                if resp.status == 429:
-                    logger.warning(f"Rate limit 429: ждём 4 секунды перед повтором")
-                    await asyncio.sleep(4)
-                    # Повторный запрос
-                    async with session.post(
-                        GEMINI_API_URL,
-                        json=payload,
-                        headers={
-                            "Content-Type": "application/json",
-                            "x-goog-api-key": GEMINI_API_KEY
-                        },
-                        timeout=aiohttp.ClientTimeout(total=30)
-                    ) as retry_resp:
-                        if retry_resp.status != 200:
-                            error_text = await retry_resp.text()
-                            logger.error(f"Повтор тоже failed {retry_resp.status}: {error_text[:500]}")
-                            return f"Извини, Gemini API перегружен (429 rate limit). Попробуй через минуту."
-                        result = await retry_resp.json()
-                        return result["candidates"][0]["content"]["parts"][0]["text"]
+                async with session.post(
+                    GEMINI_API_URL,
+                    json=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": GEMINI_API_KEY
+                    },
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    elapsed = time.time() - start
+                    logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status} (попытка {attempt+1}/3)")
 
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    logger.error(f"Gemini API error {resp.status} ({elapsed:.1f}s): {error_text[:500]}")
-                    return f"Извини, произошла ошибка при обращении к Gemini API (статус {resp.status})."
+                    # 503 или 429 — retry
+                    if resp.status in [429, 503]:
+                        if attempt < 2:  # не последняя попытка
+                            wait_time = 2 ** attempt  # 1s, 2s, 4s
+                            logger.warning(f"Статус {resp.status}: ждём {wait_time}s перед retry")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            error_text = await resp.text()
+                            logger.error(f"Все 3 попытки failed {resp.status}: {error_text[:300]}")
+                            return f"Извини, Gemini API сейчас перегружен. Попробуй через минуту."
 
-                result = await resp.json()
-                logger.info(f"Gemini успешно ответил ({len(result['candidates'][0]['content']['parts'][0]['text'])} символов)")
-                return result["candidates"][0]["content"]["parts"][0]["text"]
+                    # Любая другая ошибка
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        logger.error(f"Gemini API error {resp.status} ({elapsed:.1f}s): {error_text[:500]}")
+                        return f"Извини, произошла ошибка при обращении к Gemini API (статус {resp.status})."
+
+                    # Успех
+                    result = await resp.json()
+                    logger.info(f"Gemini успешно ответил ({len(result['candidates'][0]['content']['parts'][0]['text'])} символов)")
+                    return result["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
         logger.error(f"Gemini API exception: {type(e).__name__}: {str(e)}")
         return f"Извини, произошла ошибка: {type(e).__name__}"
