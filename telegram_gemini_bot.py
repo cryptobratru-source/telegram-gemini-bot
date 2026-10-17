@@ -223,7 +223,7 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
             "topP": 0.95,
             "topK": 40,
             "maxOutputTokens": 8192,
-            "thinking_level": "HIGH"
+            "thinkingLevel": "HIGH"
         }
     }
 
