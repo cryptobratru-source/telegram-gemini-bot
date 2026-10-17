@@ -60,7 +60,7 @@ async def save_message(chat_id: int, user_id: int, username: str, message_text: 
         await db.commit()
 
 
-async def get_chat_history(chat_id: int, limit: int = 20):
+async def get_chat_history(chat_id: int, limit: int = 100):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
@@ -247,7 +247,7 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
                         "Content-Type": "application/json",
                         "x-goog-api-key": GEMINI_API_KEY
                     },
-                    timeout=aiohttp.ClientTimeout(total=90)
+                    timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:
                     elapsed = time.time() - start
                     logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status} (попытка {attempt+1}/3)")
