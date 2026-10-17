@@ -330,6 +330,23 @@ async def handle_group_message(message: Message):
 
 async def main():
     await init_db()
+
+    # Проверяем доступные модели при старте
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": GEMINI_API_KEY}
+            ) as resp:
+                data = await resp.json()
+                if "models" in data:
+                    available = [m["name"] for m in data["models"] if "generateContent" in m.get("supportedGenerationMethods", [])]
+                    logger.info(f"Доступные модели: {', '.join(available)}")
+                else:
+                    logger.warning(f"Не удалось получить список моделей: {data}")
+    except Exception as e:
+        logger.warning(f"Ошибка при проверке моделей: {e}")
+
     logger.info("Нейробрат запущен: полная память (последние 50 + поиск по старым), отвечает только на @упоминание")
     await dp.start_polling(bot)
 
