@@ -60,7 +60,7 @@ async def save_message(chat_id: int, user_id: int, username: str, message_text: 
         await db.commit()
 
 
-async def get_chat_history(chat_id: int, limit: int = 100):
+async def get_chat_history(chat_id: int, limit: int = 20):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
