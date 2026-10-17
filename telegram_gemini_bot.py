@@ -70,33 +70,68 @@ async def get_chat_history(chat_id: int, limit: int = 100):
             return list(reversed(rows))
 
 
-async def get_full_memory(chat_id: int) -> str:
-    """Получает полную память: последние 20 + каждое 5-е из старых"""
+async def search_old_messages(chat_id: int, keywords: list, days_back: int = 90, limit: int = 10) -> list:
+    """Ищет старые сообщения по ключевым словам за последние days_back дней"""
+    if not keywords:
+        return []
+
     async with aiosqlite.connect(DB_PATH) as db:
-        # Последние 20 сообщений
+        # Формируем WHERE условие для поиска
+        where_conditions = " OR ".join(["message_text LIKE ?" for _ in keywords])
+        like_patterns = [f"%{kw}%" for kw in keywords]
+
+        query = f"""
+            SELECT username, message_text, timestamp
+            FROM messages
+            WHERE chat_id = ?
+            AND ({where_conditions})
+            AND datetime(timestamp) >= datetime('now', '-{days_back} days')
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """
+
+        async with db.execute(query, (chat_id, *like_patterns, limit)) as cursor:
+            rows = await cursor.fetchall()
+            return list(reversed(rows))  # хронологический порядок
+
+
+def extract_keywords(text: str) -> list:
+    """Извлекает ключевые слова из текста для поиска"""
+    # Убираем стоп-слова и короткие слова
+    stop_words = {"и", "в", "на", "с", "по", "для", "как", "что", "это", "так", "то", "а", "о", "у"}
+    words = text.lower().split()
+    keywords = [w.strip(".,!?:;") for w in words if len(w) > 3 and w not in stop_words]
+    return keywords[:5]  # максимум 5 ключевых слов
+
+
+async def get_full_memory(chat_id: int, user_message: str) -> str:
+    """Получает полную память: последние 20-50 + поиск по старым (если нужно)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Последние 50 сообщений
         async with db.execute(
-            "SELECT username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 20",
+            "SELECT username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT 50",
             (chat_id,)
         ) as cursor:
             recent = list(reversed(await cursor.fetchall()))
 
-        # Старые сообщения: каждое 5-е
-        async with db.execute(
-            "SELECT id, username, message_text FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT -1 OFFSET 20",
-            (chat_id,)
-        ) as cursor:
-            all_old = await cursor.fetchall()
-            old_sampled = [all_old[i] for i in range(0, len(all_old), 5)]  # каждое 5-е
-            old_sampled.reverse()  # хронологический порядок
-            old_messages = [(username, text) for _, username, text in old_sampled]
+    # Проверяем, нужен ли поиск по старым сообщениям
+    memory_triggers = ["помнишь", "назад", "тогда", "раньше", "говорил", "обсуждали", "неделю", "месяц", "вчера"]
+    needs_search = any(trigger in user_message.lower() for trigger in memory_triggers)
+
+    old_messages = []
+    if needs_search:
+        keywords = extract_keywords(user_message)
+        old_results = await search_old_messages(chat_id, keywords, days_back=90, limit=10)
+        old_messages = [(username, text) for username, text, _ in old_results]
 
     # Формируем контекст
-    old_context = "\n".join([f"{u}: {t}" for u, t in old_messages]) if old_messages else ""
     recent_context = "\n".join([f"{u}: {t}" for u, t in recent])
 
-    if old_context:
-        return f"=== Старые сообщения (дословно, каждое 5-е) ===\n{old_context}\n\n=== Последние 20 сообщений ===\n{recent_context}"
-    return recent_context
+    if old_messages:
+        old_context = "\n".join([f"{u}: {t}" for u, t in old_messages])
+        return f"=== Старые сообщения (найдено по ключевым словам) ===\n{old_context}\n\n=== Последние 50 сообщений ===\n{recent_context}"
+
+    return f"=== Последние 50 сообщений ===\n{recent_context}"
 
 
 async def download_file(file_id: str) -> bytes:
@@ -164,10 +199,10 @@ async def process_image(file_data: bytes) -> str:
 
 
 async def get_gemini_response(chat_id: int, user_message: str) -> str:
-    # Получаем полную память с умной выборкой
-    full_context = await get_full_memory(chat_id)
+    # Получаем полную память с поиском по старым (если нужно)
+    full_context = await get_full_memory(chat_id, user_message)
 
-    prompt = f"""Ты — Gemini AI, участвуешь в групповом чате Telegram с пользователем Стасом и Баламутом.
+    prompt = f"""Ты — Нейробрат (Gemini AI), участвуешь в групповом чате Telegram.
 
 История общения (дословно сохранена):
 {full_context}
@@ -175,7 +210,7 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
 Новое сообщение:
 {user_message}
 
-Ты помнишь КАЖДОЕ СЛОВО из всей истории нашего общения. Отвечай естественно, учитывая весь контекст."""
+Ты помнишь КАЖДОЕ СЛОВО из всей истории нашего общения. Используй и старую, и свежую память. Отвечай естественно, учитывая весь контекст."""
 
     payload = {
         "contents": [{
@@ -190,9 +225,12 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
+                GEMINI_API_URL,
                 json=payload,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": GEMINI_API_KEY
+                },
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 elapsed = time.time() - start
@@ -203,9 +241,12 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
                     await asyncio.sleep(4)
                     # Повторный запрос
                     async with session.post(
-                        f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
+                        GEMINI_API_URL,
                         json=payload,
-                        headers={"Content-Type": "application/json"},
+                        headers={
+                            "Content-Type": "application/json",
+                            "x-goog-api-key": GEMINI_API_KEY
+                        },
                         timeout=aiohttp.ClientTimeout(total=30)
                     ) as retry_resp:
                         if retry_resp.status != 200:
@@ -231,12 +272,12 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "Привет! Я Gemini AI бот.\n\n"
+        "Привет! Я Нейробрат (Gemini AI).\n\n"
         "Умею:\n"
-        "✅ Помню всё с момента запуска\n"
+        "✅ Помню всю историю общения (поиск по старым сообщениям)\n"
         "✅ Читаю PDF, Word, Excel\n"
         "✅ Анализирую изображения\n\n"
-        "Упомяни меня @balamut_gemini_bot или ответь Reply."
+        "Упомяни меня @имя_бота или ответь Reply — я отвечу."
     )
 
 
@@ -269,10 +310,12 @@ async def handle_group_message(message: Message):
         photo_data = await download_file(photo.file_id)
         text += f"\n{await process_image(photo_data)}"
 
+    # ВСЕГДА сохраняем сообщение в базу (для полной памяти)
     await save_message(message.chat.id, message.from_user.id, username, text)
 
     bot_username = (await bot.get_me()).username
 
+    # Отвечаем ТОЛЬКО на @упоминание или Reply
     should_respond = False
     if message.reply_to_message and message.reply_to_message.from_user.id == bot.id:
         should_respond = True
@@ -287,7 +330,7 @@ async def handle_group_message(message: Message):
 
 async def main():
     await init_db()
-    logger.info("Бот запущен с полной памятью (каждое 5-е + последние 20)")
+    logger.info("Нейробрат запущен: полная память (последние 50 + поиск по старым), отвечает только на @упоминание")
     await dp.start_polling(bot)
 
 
