@@ -247,7 +247,7 @@ async def get_gemini_response(chat_id: int, user_message: str) -> str:
                         "Content-Type": "application/json",
                         "x-goog-api-key": GEMINI_API_KEY
                     },
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=90)
                 ) as resp:
                     elapsed = time.time() - start
                     logger.info(f"Gemini ответил за {elapsed:.1f}s, статус: {resp.status} (попытка {attempt+1}/3)")
